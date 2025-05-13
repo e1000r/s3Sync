@@ -1,4 +1,4 @@
-FROM golang:1.23-alpine
+FROM golang:1.23-alpine AS builder
 
 # Install git (required for go get) and ca-certificates
 RUN apk add --no-cache git ca-certificates && update-ca-certificates
@@ -32,13 +32,13 @@ RUN ln -snf /usr/share/zoneinfo/America/Sao_Paulo /etc/localtime && echo "Americ
 WORKDIR /app
 
 # Copia o executável da fase de compilação para esta fase
-COPY --from=builder /app/s3_sync_minio .
+COPY --from=builder /app/s3sync_minio .
 
 # Copia o arquivo .env
 COPY .env .
 
 # Adiciona uma crontab para executar o script uma vez por dia
-RUN echo "0 3 * * * /app/s3_sync_minio >> /var/log/s3sync.log 2>&1" > /etc/cron.d/s3sync-cron && \
+RUN echo "0 3 * * * /app/s3sync_minio >> /var/log/s3sync.log 2>&1" > /etc/cron.d/s3sync-cron && \
     chmod 0644 /etc/cron.d/s3sync-cron && \
     crontab /etc/cron.d/s3sync-cron
 
