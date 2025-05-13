@@ -1,0 +1,143 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"io"
+	"log"
+	"os"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/joho/godotenv"
+)
+
+// Custom endpoint resolver to support MinIO
+type StaticEndpointResolver struct {
+	URL           string
+	SigningRegion string
+}
+
+func (r StaticEndpointResolver) ResolveEndpoint(service, region string) (aws.Endpoint, error) {
+	return aws.Endpoint{
+		URL:               r.URL,
+		SigningRegion:     r.SigningRegion,
+		HostnameImmutable: true,
+	}, nil
+}
+
+func main() {
+	err := godotenv.Load()
+	if err != nil {
+		log.Fatalf("Error loading .env file: %v", err)
+	}
+
+	ctx := context.Background()
+
+	// Load environment variables
+	remoteBucket := os.Getenv("REMOTE_BUCKET")
+	remoteRegion := os.Getenv("REMOTE_REGION")
+	remoteAccessKey := os.Getenv("REMOTE_ACCESS_KEY")
+	remoteSecretKey := os.Getenv("REMOTE_SECRET_KEY")
+	remoteEndpoint := os.Getenv("REMOTE_ENDPOINT")
+
+	localBucket := os.Getenv("LOCAL_BUCKET")
+	localRegion := os.Getenv("LOCAL_REGION")
+	localAccessKey := os.Getenv("LOCAL_ACCESS_KEY")
+	localSecretKey := os.Getenv("LOCAL_SECRET_KEY")
+	localEndpoint := os.Getenv("LOCAL_ENDPOINT")
+
+	// Validate required env vars
+	if remoteBucket == "" || localBucket == "" || remoteAccessKey == "" || remoteSecretKey == "" ||
+		localAccessKey == "" || localSecretKey == "" || localEndpoint == "" || remoteEndpoint == "" || remoteRegion == "" || localRegion == "" {
+		log.Fatal("Missing required environment variables")
+	}
+
+	// Remote S3 config
+	remoteCfg := aws.Config{
+		Region:      remoteRegion,
+		Credentials: credentials.NewStaticCredentialsProvider(remoteAccessKey, remoteSecretKey, ""),
+		EndpointResolver: StaticEndpointResolver{
+			URL:           remoteEndpoint,
+			SigningRegion: remoteRegion,
+		},
+	}
+	remoteClient := s3.NewFromConfig(remoteCfg, func(o *s3.Options) {
+		o.UsePathStyle = true
+	})
+
+	// Local S3 config
+	localCfg := aws.Config{
+		Region:      localRegion,
+		Credentials: credentials.NewStaticCredentialsProvider(localAccessKey, localSecretKey, ""),
+		EndpointResolver: StaticEndpointResolver{
+			URL:           localEndpoint,
+			SigningRegion: localRegion,
+		},
+	}
+	localClient := s3.NewFromConfig(localCfg, func(o *s3.Options) {
+		o.UsePathStyle = true
+	})
+
+	// List remote objects
+	paginator := s3.NewListObjectsV2Paginator(remoteClient, &s3.ListObjectsV2Input{
+		Bucket: aws.String(remoteBucket),
+	})
+
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			log.Fatalf("Error listing remote bucket: %v", err)
+		}
+
+		for _, obj := range page.Contents {
+			key := *obj.Key
+			fmt.Printf("Syncing: %s\n", key)
+
+			// Check if object already exists in local
+			_, err := localClient.HeadObject(ctx, &s3.HeadObjectInput{
+				Bucket: aws.String(localBucket),
+				Key:    aws.String(key),
+			})
+			if err == nil {
+				fmt.Printf("Already exists locally: %s\n", key)
+				continue
+			}
+
+			// Download from remote
+			remoteObj, err := remoteClient.GetObject(ctx, &s3.GetObjectInput{
+				Bucket: aws.String(remoteBucket),
+				Key:    aws.String(key),
+			})
+			if err != nil {
+				log.Printf("Failed to get remote object %s: %v", key, err)
+				continue
+			}
+
+			defer remoteObj.Body.Close()
+			buf := new(bytes.Buffer)
+			_, err = io.Copy(buf, remoteObj.Body)
+			if err != nil {
+				log.Printf("Failed to read remote object body: %v", err)
+				continue
+			}
+
+			// Upload to local
+			_, err = localClient.PutObject(ctx, &s3.PutObjectInput{
+				Bucket: aws.String(localBucket),
+				Key:    aws.String(key),
+				Body:   bytes.NewReader(buf.Bytes()),
+				ACL:    types.ObjectCannedACLPrivate,
+			})
+			if err != nil {
+				log.Printf("Failed to upload to local bucket: %v", err)
+				continue
+			}
+
+			fmt.Printf("Successfully synced: %s\n", key)
+		}
+	}
+}

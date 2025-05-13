@@ -1,0 +1,9 @@
+version: '3.8'
+
+services:
+  s3sync:
+    build: .
+    container_name: s3sync
+    env_file:
+      - .env
+    restart: unless-stopped
