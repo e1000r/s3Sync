@@ -23,12 +23,14 @@ func main() {
 
 	// Load environment variables
 	remoteBucket := os.Getenv("REMOTE_BUCKET")
+	remoteRegion := os.Getenv("REMOTE_REGION")
 	remoteAccessKey := os.Getenv("REMOTE_ACCESS_KEY")
 	remoteSecretKey := os.Getenv("REMOTE_SECRET_KEY")
 	remoteEndpoint := os.Getenv("REMOTE_ENDPOINT")
 	remoteUseSSL := os.Getenv("REMOTE_USE_SSL") != "false"
 
 	localBucket := os.Getenv("LOCAL_BUCKET")
+	localRegion := os.Getenv("LOCAL_REGION")
 	localAccessKey := os.Getenv("LOCAL_ACCESS_KEY")
 	localSecretKey := os.Getenv("LOCAL_SECRET_KEY")
 	localEndpoint := os.Getenv("LOCAL_ENDPOINT")
@@ -43,6 +45,7 @@ func main() {
 	// Initialize remote MinIO client
 	remoteClient, err := minio.New(remoteEndpoint, &minio.Options{
 		Creds:  credentials.NewStaticV4(remoteAccessKey, remoteSecretKey, ""),
+		Region: remoteRegion,
 		Secure: remoteUseSSL,
 	})
 	if err != nil {
@@ -52,6 +55,7 @@ func main() {
 	// Initialize local MinIO client
 	localClient, err := minio.New(localEndpoint, &minio.Options{
 		Creds:  credentials.NewStaticV4(localAccessKey, localSecretKey, ""),
+		Region: localRegion,
 		Secure: localUseSSL,
 	})
 	if err != nil {
